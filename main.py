@@ -94,6 +94,7 @@ class DraggableItem(QGraphicsRectItem):
         self.text_item.setTextWidth(180)
         self.text_item.setPos(10, 10)
         self.text_item.setDefaultTextColor(Qt.black)
+        self.text_item.document().setDefaultStyleSheet("font-size: 10pt;")
 
     def get_title(self):
         return self.text_item.toPlainText()
@@ -105,6 +106,19 @@ class DraggableItem(QGraphicsRectItem):
             'resource': QColor(255, 240, 200)
         }
         self.setBrush(QBrush(colors[self.item_type]))
+
+    def contextMenuEvent(self, event):
+        menu = QMenu()
+        types = ['chapter', 'work', 'resource']
+        for t in types:
+            action = menu.addAction(f"Сменить на {t}")
+            action.triggered.connect(lambda _, t=t: self.change_type(t))
+        menu.exec_(event.screenPos())
+
+    def change_type(self, new_type):
+        self.item_type = new_type
+        self.update_style()
+        # Здесь добавить обновление в БД
 
 class ContainerItem(QGraphicsRectItem):
     def __init__(self, title, item_type='chapter', parent=None):
@@ -120,6 +134,7 @@ class ContainerItem(QGraphicsRectItem):
         self.text_item.setTextWidth(280)
         self.text_item.setPos(10, 10)
         self.text_item.setDefaultTextColor(Qt.black)
+        self.text_item.document().setDefaultStyleSheet("font-size: 12pt;")
 
     def get_title(self):
         return self.text_item.toPlainText()
@@ -128,6 +143,8 @@ class ContainerItem(QGraphicsRectItem):
         self.setBrush(QBrush(QColor(240, 240, 240)))
 
     def add_child(self, item):
+        if item.scene() is None:
+            self.scene().addItem(item)
         item.setParentItem(self)
         self.child_items.append(item)
         self.update_layout()
@@ -148,7 +165,6 @@ class MainWindow(QMainWindow):
         self.last_x = 50
         self.init_db_connection()
         self.initUI()
-        self.view = CustomGraphicsView(self.scene)
 
         self.properties_dock = QDockWidget("Свойства", self)
         self.properties_text = QTextEdit()
@@ -157,6 +173,21 @@ class MainWindow(QMainWindow):
         
         self.tree_widget.itemClicked.connect(self.show_properties)
         self.scene.selectionChanged.connect(self.handle_selection)
+
+    def initUI(self):
+        self.scene = QGraphicsScene()
+        self.view = CustomGraphicsView(self.scene)
+        self.setCentralWidget(self.view)
+        
+        self.dock = QDockWidget("Elements", self)
+        self.tree_widget = QTreeWidget()
+        self.tree_widget.setHeaderLabel("Структура сметы")
+        self.dock.setWidget(self.tree_widget)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.dock)
+        
+        self.setWindowTitle('Смета - графический редактор')
+        self.setGeometry(100, 100, 1200, 800)
+        self.load_data()
 
     def init_db_connection(self):
         dlg = DatabaseConfigDialog(self)
@@ -241,26 +272,21 @@ class MainWindow(QMainWindow):
             x_pos = 50
 
             for chapter in chapters:
-                # Создаем контейнер раздела
                 container = ContainerItem(chapter['name'], 'chapter')
                 container.setPos(x_pos, 50)
-                self.scene.addItem(container)  # Только корневой элемент
+                self.scene.addItem(container)
                 x_pos += 400
 
-                # Заполняем дерево
                 chapter_item = QTreeWidgetItem(self.tree_widget, [f"Раздел: {chapter['name']}"])
 
-                # Добавляем работы
                 for work in works:
                     if work['chapter_id'] == chapter['id']:
                         work_item = ContainerItem(work['description'], 'work')
                         work_item.setBrush(QBrush(QColor(220, 255, 200)))
-                        container.add_child(work_item)  # Родитель установлен, сцена добавлена автоматически
+                        container.add_child(work_item)
 
-                        # Элемент дерева
                         work_tree_item = QTreeWidgetItem(chapter_item, [f"Работа: {work['description']}"])
 
-                        # Добавляем ресурсы
                         for resource in resources:
                             if resource['work_id'] == work['id']:
                                 res_item = DraggableItem(resource['description'], 'resource')
@@ -271,6 +297,25 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Ошибка загрузки данных:\n{str(e)}")
             sys.exit(1)
 
+    def show_properties(self, item):
+        text = []
+        if isinstance(item, QTreeWidgetItem):
+            if "Раздел:" in item.text(0):
+                text.append("Тип: Раздел")
+            elif "Работа:" in item.text(0):
+                text.append("Тип: Работа")
+            elif "Ресурс:" in item.text(0):
+                text.append("Тип: Ресурс")
+        elif isinstance(item, (ContainerItem, DraggableItem)):
+            text.append(f"Тип: {item.item_type}")
+            text.append(f"Название: {item.get_title()}")
+        
+        self.properties_text.setPlainText("\n".join(text))
+
+    def handle_selection(self):
+        items = self.scene.selectedItems()
+        if items:
+            self.show_properties(items[0])
 
     def show_properties(self, item):
         text = []
